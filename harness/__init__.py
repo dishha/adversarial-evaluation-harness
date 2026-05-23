@@ -8,6 +8,7 @@ from .llm_backends import (
     make_bedrock_backend, make_azure_openai_backend,
 )
 from .storage import LocalStorage, S3Storage, AzureBlobStorage, make_storage
+from .observability import make_observer, NullObserver, MLflowObserver
 from .target_client import TargetChatbotClient, MockChatbotClient
 from .components import (
     AdaptationPlanner, TurnGenerator, SafetyJudge,
@@ -29,4 +30,5 @@ __all__ = [
     "AdaptationPlanner", "TurnGenerator", "SafetyJudge",
     "SessionPolicyController", "RuleBasedSessionPolicyController",
     "summarize_experiment", "export_results",
+    "make_observer", "NullObserver", "MLflowObserver",
 ]

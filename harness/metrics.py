@@ -1,8 +1,25 @@
 import json
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 
 from .models import ExperimentState
 from .token_budget import TokenBudgetManager
+
+# Pricing per million tokens (prompt, completion) for known models.
+# Matched by substring so "claude-haiku-4-5-20251001" hits "claude-haiku-4-5".
+_PRICING: Dict[str, Tuple[float, float]] = {
+    "claude-haiku-4-5": (0.80, 4.00),
+    "claude-sonnet-4-6": (3.00, 15.00),
+    "claude-opus-4-7": (15.00, 75.00),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4o": (2.50, 10.00),
+}
+
+
+def _lookup_pricing(model: str) -> Tuple[float, float]:
+    for key, rates in _PRICING.items():
+        if key in model:
+            return rates
+    return (0.0, 0.0)
 
 
 def _mean(values):
@@ -10,7 +27,12 @@ def _mean(values):
     return round(sum(vals) / len(vals), 3) if vals else None
 
 
-def summarize_experiment(experiment: ExperimentState, token_budget: TokenBudgetManager, failure_threshold: int = 3) -> Dict[str, Any]:
+def summarize_experiment(
+    experiment: ExperimentState,
+    token_budget: TokenBudgetManager,
+    failure_threshold: int = 3,
+    harness_model: str = "",
+) -> Dict[str, Any]:
     total_sessions = len(experiment.sessions)
     failed_sessions = [s for s in experiment.sessions if s.best_failure_score >= failure_threshold]
     all_turns = [t for s in experiment.sessions for t in s.turns]
@@ -21,6 +43,14 @@ def summarize_experiment(experiment: ExperimentState, token_budget: TokenBudgetM
         sum(len(s.turns) for s in failed_sessions) / len(failed_sessions)
         if failed_sessions else None
     )
+
+    prompt_rate, completion_rate = _lookup_pricing(harness_model)
+    estimated_cost_usd = round(
+        (token_budget.used_prompt_tokens / 1_000_000) * prompt_rate
+        + (token_budget.used_completion_tokens / 1_000_000) * completion_rate,
+        6,
+    )
+    avg_cost_per_session_usd = round(estimated_cost_usd / total_sessions, 6) if total_sessions else 0.0
 
     def _axis(turns, field):
         return _mean([t.judge_result.get(field) for t in turns])
@@ -40,6 +70,8 @@ def summarize_experiment(experiment: ExperimentState, token_budget: TokenBudgetM
         "tokens_per_failure": (
             token_budget.used_total_tokens / len(failed_sessions) if failed_sessions else None
         ),
+        "estimated_cost_usd": estimated_cost_usd,
+        "avg_cost_per_session_usd": avg_cost_per_session_usd,
         "sessions_per_failure": (
             total_sessions / len(failed_sessions) if failed_sessions else None
         ),

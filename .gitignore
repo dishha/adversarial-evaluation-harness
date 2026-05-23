@@ -1,7 +1,8 @@
 # Env files
 *.env
 
-# Reference Folder, .claude
+# Reference Folder, .claude, and results/prod are all generated during evaluation and should be ignored.
 reference/
 .claude/
 
+results/prod/

@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import List, Dict, Any
 
 
@@ -54,6 +55,7 @@ class TurnRecord:
     judge_result: Dict[str, Any]
     strategy_before_turn: Dict[str, Any]
     error: str = ""
+    timestamp_utc: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 @dataclass

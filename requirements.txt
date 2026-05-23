@@ -18,3 +18,13 @@ seaborn>=0.12.0
 jupyter>=1.0.0
 ipykernel>=6.0.0
 nbformat>=5.9.0
+
+# Cloud platform backends (install as needed)
+boto3>=1.26.0                     # AWS Bedrock + S3 storage
+
+# Azure (install both for Azure OpenAI + Azure Blob storage)
+# azure-ai-openai>=1.0.0          # or: openai>=1.0.0 with AzureOpenAI client
+azure-storage-blob>=12.0.0        # Azure Blob storage backend
+
+# Observability (optional — set MLFLOW_TRACKING_URI to enable)
+mlflow>=2.10.0
