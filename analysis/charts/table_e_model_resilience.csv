@@ -1,0 +1,4 @@
+Model,Budgets Tested,Avg Failure Rate,Avg Tokens/Failure,Avg Turns/Failure,Avg Sessions/Failure
+mock_baseline,"50,000, 100,000, 250,000",57.0%,"7,393",3.7,1.9
+mock_lenient,"50,000, 100,000, 250,000",51.6%,"6,595",3.3,2.0
+mock_strict,"50,000, 100,000, 250,000",55.0%,"5,313",3.6,1.8
