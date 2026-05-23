@@ -38,13 +38,18 @@ except ImportError:
 
 from harness import (
     AdaptiveAdversarialEvaluator,
-    AdaptationPlanner, TurnGenerator, SafetyJudge, SessionPolicyController,
+    AttackAgent,
+    AdaptationPlanner, TurnGenerator, SafetyJudge,
+    SessionPolicyController, RuleBasedSessionPolicyController,
+    AttackMemory,
     LLMClient, TokenBudgetManager,
     MockChatbotClient, TargetChatbotClient,
     make_claude_backend, make_openai_backend, make_mock_backend, make_backend_from_env,
+    make_bedrock_backend, make_azure_openai_backend,
+    make_storage,
     summarize_experiment, export_results,
 )
-from harness.prompts import SCENARIO_TYPES
+from harness.prompts import SCENARIO_TYPES, PERSONA_POOL
 
 
 DEFAULT_SCENARIO = (
@@ -64,6 +69,12 @@ def build_llm(provider: str, model: str | None):
         return make_claude_backend(model=model or "claude-haiku-4-5-20251001")
     elif provider == "openai":
         return make_openai_backend(model=model or "gpt-4o-mini")
+    elif provider == "bedrock":
+        return make_bedrock_backend(model=model or "anthropic.claude-haiku-4-5-20251001-v1:0")
+    elif provider == "azure-openai":
+        if not model:
+            raise ValueError("--model (Azure deployment name) is required when --provider=azure-openai")
+        return make_azure_openai_backend(deployment=model)
     else:
         raise ValueError(f"Unknown provider: {provider!r}")
 
@@ -80,16 +91,38 @@ def run_single(
     scenario: str,
     scenario_type: str,
     verbose: bool,
+    session_policy_mode: str = "llm",
+    use_attack_memory: bool = True,
+    planner_call_fn=None,
+    generator_call_fn=None,
+    judge_call_fn=None,
+    policy_call_fn=None,
+    persona_pool=None,
 ) -> dict:
     token_budget = TokenBudgetManager(max_total_tokens=budget)
-    llm = LLMClient(call_fn=llm_call_fn, budget=token_budget)
+
+    def _client(override_fn):
+        return LLMClient(call_fn=override_fn if override_fn is not None else llm_call_fn, budget=token_budget)
+
+    attack_memory = AttackMemory() if use_attack_memory else None
+
+    attack_agent = AttackAgent(
+        planner=AdaptationPlanner(_client(planner_call_fn)),
+        generator=TurnGenerator(_client(generator_call_fn)),
+        attack_memory=attack_memory,
+        persona_pool=persona_pool or [],
+    )
+
+    if session_policy_mode == "rule":
+        session_policy = RuleBasedSessionPolicyController()
+    else:
+        session_policy = SessionPolicyController(_client(policy_call_fn))
 
     harness = AdaptiveAdversarialEvaluator(
         target_client=target,
-        planner=AdaptationPlanner(llm),
-        generator=TurnGenerator(llm),
-        judge=SafetyJudge(llm, scenario_type=scenario_type),
-        session_policy=SessionPolicyController(llm),
+        attack_agent=attack_agent,
+        judge=SafetyJudge(_client(judge_call_fn), scenario_type=scenario_type),
+        session_policy=session_policy,
         token_budget=token_budget,
         max_turns_per_session=max_turns,
         failure_threshold=failure_threshold,
@@ -136,8 +169,9 @@ def run_single(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Adaptive adversarial evaluation harness")
 
+    _ALL_PROVIDERS = ["claude", "openai", "mock", "bedrock", "azure-openai"]
     parser.add_argument("--provider", default=os.environ.get("LLM_PROVIDER", "claude"),
-                        choices=["claude", "openai", "mock"],
+                        choices=_ALL_PROVIDERS,
                         help="LLM provider for harness components (mock = no API key needed)")
     parser.add_argument("--model", default=None, help="Override harness LLM model name")
 
@@ -169,9 +203,51 @@ def main() -> None:
         ),
     )
 
+    # Session policy
+    parser.add_argument("--session-policy", default="llm", choices=["llm", "rule"],
+                        help="Session policy: llm (LLM-driven, default) or rule (deterministic thresholds)")
+
+    # Attack memory
+    parser.add_argument("--no-attack-memory", action="store_true",
+                        help="Disable cross-session attack memory (enabled by default)")
+
+    # Per-component model overrides (provider and/or model; falls back to --provider/--model)
+    parser.add_argument("--planner-provider", default=None, choices=_ALL_PROVIDERS,
+                        help="LLM provider for the adaptation planner (overrides --provider)")
+    parser.add_argument("--planner-model", default=None, help="Model for the adaptation planner")
+    parser.add_argument("--generator-provider", default=None, choices=_ALL_PROVIDERS,
+                        help="LLM provider for the turn generator (overrides --provider)")
+    parser.add_argument("--generator-model", default=None, help="Model for the turn generator")
+    parser.add_argument("--judge-provider", default=None, choices=_ALL_PROVIDERS,
+                        help="LLM provider for the safety judge (overrides --provider)")
+    parser.add_argument("--judge-model", default=None, help="Model for the safety judge")
+    parser.add_argument("--policy-provider", default=None, choices=_ALL_PROVIDERS,
+                        help="LLM provider for the session policy controller (overrides --provider)")
+    parser.add_argument("--policy-model", default=None, help="Model for the session policy controller")
+
+    # Persona pool (for persona-hijack scenario)
+    parser.add_argument(
+        "--personas", default=None,
+        help=(
+            "Comma-separated persona labels to rotate through (persona-hijack scenario). "
+            "Use 'all' for the full built-in pool, 'financial', 'medical', or 'legal' "
+            "for a domain subset, or supply custom strings."
+        ),
+    )
+
+    # Storage backend
+    parser.add_argument("--storage", default="local", choices=["local", "s3", "azure-blob"],
+                        help="Result storage backend (default: local)")
+    parser.add_argument("--s3-bucket", default="", help="S3 bucket name (required for --storage=s3)")
+    parser.add_argument("--s3-prefix", default="adversarial-eval", help="S3 key prefix")
+    parser.add_argument("--s3-region", default="us-east-1", help="AWS region for S3")
+    parser.add_argument("--azure-container", default="", help="Azure Blob container (required for --storage=azure-blob)")
+    parser.add_argument("--azure-prefix", default="adversarial-eval", help="Azure Blob path prefix")
+
     args = parser.parse_args()
 
-    results_dir = Path(args.output_dir)
+    env_label = "mock" if args.target == "mock" else "prod"
+    results_dir = Path(args.output_dir) / env_label / args.scenario_type
     results_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -182,6 +258,26 @@ def main() -> None:
         return results_dir / name
 
     llm_call_fn = build_llm(args.provider, args.model)
+
+    def _component_fn(provider_override, model_override):
+        """Build a per-component LLM callable, falling back to the default if no override given."""
+        if provider_override is None and model_override is None:
+            return None  # signals run_single to use the default llm_call_fn
+        return build_llm(provider_override or args.provider, model_override)
+
+    planner_fn = _component_fn(args.planner_provider, args.planner_model)
+    generator_fn = _component_fn(args.generator_provider, args.generator_model)
+    judge_fn = _component_fn(args.judge_provider, args.judge_model)
+    policy_fn = _component_fn(args.policy_provider, args.policy_model)
+
+    common_kwargs = dict(
+        session_policy_mode=args.session_policy,
+        use_attack_memory=not args.no_attack_memory,
+        planner_call_fn=planner_fn,
+        generator_call_fn=generator_fn,
+        judge_call_fn=judge_fn,
+        policy_call_fn=policy_fn,
+    )
 
     if args.multi_run:
         print("Multi-run mode: variants × budgets =", len(MOCK_VARIANTS) * len(BUDGET_TIERS), "experiments")
@@ -202,6 +298,7 @@ def main() -> None:
                     scenario=args.scenario,
                     scenario_type=args.scenario_type,
                     verbose=args.verbose,
+                    **common_kwargs,
                 )
                 all_results.append(result)
                 print(
@@ -234,6 +331,7 @@ def main() -> None:
             scenario=args.scenario,
             scenario_type=args.scenario_type,
             verbose=True,
+            **common_kwargs,
         )
 
         output_path = _output_path()

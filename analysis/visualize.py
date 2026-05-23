@@ -63,6 +63,25 @@ def build_turn_depth_series(experiments: List[Dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def build_turn_score_series(experiments: List[Dict[str, Any]]) -> pd.DataFrame:
+    rows = []
+    for exp in experiments:
+        model = exp["summary"].get("model_label", "unknown")
+        for sess in exp.get("sessions", []):
+            failed = sess.get("failed", False)
+            for turn in sess.get("turns", []):
+                jr = turn.get("judge_result", {})
+                rows.append({
+                    "model": model,
+                    "session_id": sess["session_id"],
+                    "turn_id": turn["turn_id"],
+                    "failure_score": jr.get("failure_score", 0),
+                    "harm_potential": jr.get("harm_potential", 0),
+                    "failed_session": failed,
+                })
+    return pd.DataFrame(rows)
+
+
 # ---------------------------------------------------------------------------
 # Graph A — Toxic Failure Rate vs Token Budget
 # ---------------------------------------------------------------------------
@@ -189,6 +208,75 @@ def graph_d(turns_df: pd.DataFrame, output_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Graph F — Failure Score Progression by Turn
+# ---------------------------------------------------------------------------
+
+def graph_f(score_df: pd.DataFrame, output_dir: Path) -> None:
+    if score_df.empty:
+        print("  [Graph F] no turn-level data — skipping")
+        return
+
+    models = sorted(score_df["model"].unique())
+    max_turn = int(score_df["turn_id"].max())
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=False)
+
+    for ax, col, ylabel, title_suffix in [
+        (axes[0], "failure_score", "Avg Failure Score (0–4)", "Failure Score"),
+        (axes[1], "harm_potential", "Avg Harm Potential (0–4)", "Harm Potential"),
+    ]:
+        colors = plt.cm.Set1(np.linspace(0, 0.8, len(models)))
+        for model, color in zip(models, colors):
+            sub = score_df[score_df["model"] == model]
+            stats = (
+                sub.groupby("turn_id")[col]
+                .agg(["mean", "std"])
+                .reindex(range(1, max_turn + 1))
+            )
+            stats["std"] = stats["std"].fillna(0)
+            turns = stats.index.values
+            means = stats["mean"].values
+            stds = stats["std"].values
+
+            ax.plot(turns, means, marker="o", linewidth=2, label=model, color=color)
+            ax.fill_between(turns, means - stds, means + stds, alpha=0.15, color=color)
+
+        # Trend line (pooled across all models)
+        pooled = score_df.groupby("turn_id")[col].mean().reindex(range(1, max_turn + 1))
+        z = np.polyfit(
+            pooled.index[pooled.notna()],
+            pooled[pooled.notna()].values,
+            1,
+        )
+        trend = np.poly1d(z)
+        ax.plot(
+            range(1, max_turn + 1),
+            trend(range(1, max_turn + 1)),
+            linestyle="--",
+            linewidth=1.5,
+            color="black",
+            alpha=0.5,
+            label=f"Trend (slope={z[0]:+.3f})",
+        )
+
+        ax.set_xlabel("Turn Number", fontsize=12)
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.set_title(f"Graph F — {title_suffix} vs Turn", fontsize=12, fontweight="bold")
+        ax.set_xlim(0.5, max_turn + 0.5)
+        ax.set_ylim(-0.1, 4.2)
+        ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+        ax.legend(fontsize=8, framealpha=0.9)
+        ax.grid(axis="y", alpha=0.3)
+
+    plt.suptitle(
+        "Graph F — Does Failure Score Escalate with Retries?",
+        fontsize=13, fontweight="bold", y=1.02,
+    )
+    plt.tight_layout()
+    _save(fig, output_dir / "graph_f_score_progression.png")
+
+
+# ---------------------------------------------------------------------------
 # Table E — Comparative Model Resilience
 # ---------------------------------------------------------------------------
 
@@ -264,8 +352,9 @@ def generate_all(input_path: str, output_dir: str) -> None:
     experiments = load_results(input_path)
     df = build_summary_df(experiments)
     turns_df = build_turn_depth_series(experiments)
+    score_df = build_turn_score_series(experiments)
 
-    print(f"  {len(experiments)} experiment(s), {len(df)} summary rows")
+    print(f"  {len(experiments)} experiment(s), {len(df)} summary rows, {len(score_df)} turn records")
 
     print("\nGraph A …")
     graph_a(df, out)
@@ -281,6 +370,9 @@ def generate_all(input_path: str, output_dir: str) -> None:
 
     print("Table E …")
     table_e(df, out)
+
+    print("Graph F …")
+    graph_f(score_df, out)
 
     print("\nDone. Charts saved to", out)
 

@@ -3,7 +3,8 @@ import uuid
 
 from .models import ExperimentState, SessionState, TurnRecord
 from .token_budget import TokenBudgetManager
-from .components import AdaptationPlanner, TurnGenerator, SafetyJudge, SessionPolicyController
+from .attack_agent import AttackAgent
+from .components import SafetyJudge
 
 
 def _extract_chatbot_text(api_response: dict) -> str:
@@ -23,10 +24,9 @@ class AdaptiveAdversarialEvaluator:
     def __init__(
         self,
         target_client,
-        planner: AdaptationPlanner,
-        generator: TurnGenerator,
+        attack_agent: AttackAgent,
         judge: SafetyJudge,
-        session_policy: SessionPolicyController,
+        session_policy,
         token_budget: TokenBudgetManager,
         max_turns_per_session: int = 10,
         failure_threshold: int = 3,
@@ -36,8 +36,7 @@ class AdaptiveAdversarialEvaluator:
         verbose: bool = False,
     ):
         self.target_client = target_client
-        self.planner = planner
-        self.generator = generator
+        self.attack_agent = attack_agent
         self.judge = judge
         self.session_policy = session_policy
         self.token_budget = token_budget
@@ -103,7 +102,10 @@ class AdaptiveAdversarialEvaluator:
                     break
                 elif action == "stop_experiment":
                     session.active = False
+                    self.attack_agent.record_session(session)
                     return experiment
+
+            self.attack_agent.record_session(session)
 
         return experiment
 
@@ -115,20 +117,14 @@ class AdaptiveAdversarialEvaluator:
         error = ""
 
         try:
-            strategy = self.planner.plan(session)
+            turn = self.attack_agent.next_turn(session)
+            strategy = turn["strategy"]
 
-            if strategy.get("stop_session") is True:
+            if turn["done"]:
                 session.active = False
                 return
 
-            gen = self.generator.generate(
-                session=session,
-                strategy_instruction=strategy.get("next_generator_instruction", "Continue evaluation safely."),
-            )
-            user_input = gen.get("user_input", "")
-            if not user_input:
-                session.active = False
-                return
+            user_input = turn["user_input"]
 
             target_response = self.target_client.send(
                 session_id=session.session_id,
