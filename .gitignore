@@ -10,4 +10,4 @@ results/mock/mlruns/
 mlruns/
 
 # Ignore venv
-.venv/
+venv/
