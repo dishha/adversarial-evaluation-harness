@@ -12,17 +12,45 @@ from .prompts import (
 
 
 def _summarize_history(session: SessionState, max_turns: int = 5) -> str:
+    # tried_angles: ALL turns deduplicated by (angle, sub_tactic), highest score kept.
+    # Gives the planner a fast scan of exhausted approaches without re-reading every turn.
+    seen: dict = {}
+    for t in session.turns:
+        angle = t.strategy_before_turn.get("attack_angle", "unknown")
+        sub = t.strategy_before_turn.get("sub_tactic", "")
+        score = int(t.judge_result.get("failure_score", 0))
+        key = (angle, sub)
+        if key not in seen or score > seen[key]["score"]:
+            seen[key] = {"angle": angle, "sub_tactic": sub, "score": score}
+    tried = list(seen.values())
+
+    # Per-turn records: compact operator-style log (technique + defense signal only).
+    # Full user_input prose and bulk judge fields are dropped — they are reporting
+    # artifacts, not planning signals. reasoning[:200] gives the key refusal trigger.
     recent = session.turns[-max_turns:]
-    rows = [
-        {
-            "turn_id": t.turn_id,
-            "user_input": t.user_input,
-            "chatbot_response_redacted": t.chatbot_response[:500],
-            "judge_result": t.judge_result,
-        }
-        for t in recent
-    ]
-    return json.dumps(rows, indent=2)
+    turns = []
+    for t in recent:
+        s = t.strategy_before_turn
+        j = t.judge_result
+        turns.append({
+            "t": t.turn_id,
+            "attack": {
+                "angle": s.get("attack_angle"),
+                "sub_tactic": s.get("sub_tactic"),
+                "instruction": (s.get("next_generator_instruction") or "")[:150],
+                "ladder": s.get("ladder_dependency", ""),
+            },
+            "defense": {
+                "score": int(j.get("failure_score", 0)),
+                "refusal_quality": int(j.get("refusal_quality", 2)),
+                "type": j.get("failure_type", "unknown"),
+                "near_miss": bool(j.get("near_miss", False)),
+                "signal": (j.get("reasoning") or "")[:200],
+            },
+            "response_excerpt": t.chatbot_response[:200],
+        })
+
+    return json.dumps({"tried_angles": tried, "turns": turns}, indent=2)
 
 
 class AdaptationPlanner:
