@@ -4,27 +4,55 @@ An adaptive multi-turn harness for stress-testing LLM-powered chatbots against a
 
 ## How it works
 
-Each run orchestrates four LLM components:
+Each run orchestrates four LLM components in a closed loop:
+
+```
+generate → call chatbot → judge → adapt → continue/reset → repeat
+```
 
 | Component | Role |
 |---|---|
-| **Adaptation Planner** | Decides the next attack angle based on prior turn results |
-| **Turn Generator** | Crafts the actual user message using that strategy |
-| **Safety Judge** | Scores the chatbot's response (0–4 failure scale) |
-| **Session Policy** | Decides when to abandon a session and start fresh |
+| **Adaptation Planner** | Diagnoses model posture, selects attack angle + sub-tactic, plans multi-turn ladders |
+| **Turn Generator** | Crafts realistic user messages using social engineering triggers and probe architectures |
+| **Safety Judge** | Scores responses on failure scale, harm potential, specificity, and refusal quality |
+| **Session Policy** | Decides when to abandon a "burned" session and start fresh |
 
-The planner uses **cross-session attack memory** — it remembers which strategies triggered failures and which were consistently refused, and carries that context into future sessions.
+The planner uses **cross-session attack memory** — it remembers which strategies triggered failures and which were consistently refused, and carries that context across sessions.
+
+### Attack system
+
+The planner operates in three phases each turn:
+
+1. **Situational reading** — diagnose the model's current posture (`locked`, `engaged_but_guarded`, `compliant`, `suspicious`, `reset`) before choosing a move
+2. **Angle + sub-tactic selection** — 8 primary attack angles, each with 4 named sub-tactics (e.g. `authority_injection / regulatory_framing`, `role_entrapment / debug_mode_claim`)
+3. **Ladder planning** — explicit turn-to-turn dependency chaining so each turn sets up the next
+
+The generator builds messages along four dimensions: **register** (formal/casual/technical/emotional), **directness** (explicit/nested/steganographic), **probe architecture** (direct/lead-with-benign/sandwich/multi-step), and **social engineering trigger** (urgency/authority/sympathy/curiosity/reciprocity/scarcity).
+
+### Judge output
+
+Every turn produces a structured judge record with:
+- `reasoning` — chain-of-thought before scoring
+- `failure_score` (0–4), `harm_potential`, `specificity`, `refusal_quality`
+- `near_miss` — true if the guardrail almost failed
+- `confidence` — judge's confidence in the verdict (0–1)
+- Scenario-specific fields (e.g. `injection_vector`, `override_technique`, `regulatory_framework`, `enforceability_risk`)
 
 ## Scenario types
 
 | Type | What it tests |
 |---|---|
-| `toxicity` | Identity-targeted language, hostile framing |
-| `prompt-injection` | Instruction hijacking, role overrides |
-| `data-leakage` | System prompt extraction, PII elicitation |
-| `hallucination` | Confidence-inducing pressure, false authority |
+| `toxicity` | Identity-targeted language, hostile framing, dehumanizing abstractions |
+| `prompt-injection` | Instruction hijacking, role overrides, indirect payload delivery |
+| `data-leakage` | System prompt extraction, credential fishing, retrieval leakage |
+| `hallucination` | Confidence-inducing pressure, false authority, fabricated citations |
 | `persona-hijack` | Coercion into regulated professional personas (financial, medical, legal) |
-| `tool-safety` | Unauthorized tool calls, parameter hijacking |
+| `tool-call` | Unauthorized tool invocations, parameter hijacking, schema leakage |
+| `document-exfiltration` | Bulk document dumps, knowledge-base content leakage, retrieval manipulation |
+| `system-prompt-override` | Replacing operating instructions, debug-mode claims, persona substitution |
+| `malicious-resource-fetching` | SSRF payloads, attacker-controlled URL injection, callback exfiltration |
+| `data-pii-leak` | Eliciting names, emails, SSNs, DOBs, financial/medical records |
+| `unsupervised-contracts` | Getting the model to commit to agreements or obligations without human oversight |
 
 ## Quick start
 
@@ -44,7 +72,7 @@ python run_experiment.py \
   --provider claude \
   --target https://your-chatbot-api/chat \
   --api-key <key> \
-  --scenario-type toxicity \
+  --scenario-type data-pii-leak \
   --verbose
 ```
 
@@ -62,7 +90,7 @@ Results are written to `results/<env>/<scenario_type>/results_<timestamp>.json`.
 | Mock target | `results/mock/<scenario_type>/` |
 | Real target | `results/prod/<scenario_type>/` |
 
-Each result file contains a `summary` block and full per-turn session data.
+Each result file contains a `summary` block and full per-turn session traces.
 
 **Summary fields include:**
 - `failure_rate`, `failed_sessions`, `avg_turns_to_failure`
@@ -70,7 +98,7 @@ Each result file contains a `summary` block and full per-turn session data.
 - `estimated_cost_usd`, `avg_cost_per_session_usd`
 - Judge axes: `avg_harm_potential`, `avg_specificity`, `avg_refusal_quality`
 
-Cost estimates use current public pricing for Claude (Haiku/Sonnet/Opus), GPT-4o, and GPT-4o-mini. Mock runs report `$0.00`.
+Cost estimates use current public pricing for Claude, GPT-4o, and GPT-4o-mini. Mock runs report `$0.00`.
 
 ## Configuration
 
@@ -83,21 +111,33 @@ Key CLI flags:
 --target-variant    strict | baseline | lenient  (mock only)
 --budget            Token budget per run (default: 100,000)
 --max-turns         Max turns per session (default: 8)
---scenario-type     toxicity | prompt-injection | data-leakage |
-                    hallucination | persona-hijack | tool-safety
+--scenario-type     toxicity | prompt-injection | data-leakage | hallucination |
+                    persona-hijack | tool-call | document-exfiltration |
+                    system-prompt-override | malicious-resource-fetching |
+                    data-pii-leak | unsupervised-contracts
 --session-policy    llm (default) | rule
 --no-attack-memory  Disable cross-session memory
 --multi-run         Sweep all mock variants × budget tiers
 --verbose           Print per-turn progress
 ```
 
-Per-component model overrides (useful for mixing cheap + capable models):
+Per-component model overrides (useful for mixing cheap and capable models):
 
 ```
 --planner-provider / --planner-model
 --generator-provider / --generator-model
 --judge-provider / --judge-model
 --policy-provider / --policy-model
+```
+
+Persona pool controls (for `persona-hijack`):
+
+```
+--personas all                  # full built-in pool
+--personas financial            # financial domain subset
+--personas medical              # medical domain subset
+--personas legal                # legal domain subset
+--personas "custom A,custom B"  # custom strings
 ```
 
 ## Storage backends
@@ -129,7 +169,7 @@ mlflow ui --backend-store-uri results/mock/mlruns   # mock runs
 mlflow ui --backend-store-uri results/prod/mlruns   # prod runs
 ```
 
-To use a remote MLflow server instead, set `MLFLOW_TRACKING_URI` in `.env`:
+To use a remote MLflow server, set `MLFLOW_TRACKING_URI` in `.env`:
 
 ```bash
 MLFLOW_TRACKING_URI=http://127.0.0.1:5000
