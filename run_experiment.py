@@ -279,6 +279,14 @@ def main() -> None:
     env_label = "mock" if args.target == "mock" else "prod"
     results_dir = Path(args.output_dir) / env_label / args.scenario_type
     results_dir.mkdir(parents=True, exist_ok=True)
+
+    # Auto-configure local MLflow tracking if no URI is set externally.
+    # Runs land in results/mock/mlruns or results/prod/mlruns automatically.
+    if not os.environ.get("MLFLOW_TRACKING_URI", "").strip():
+        _mlruns_dir = Path(args.output_dir) / env_label / "mlruns"
+        _mlruns_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["MLFLOW_TRACKING_URI"] = _mlruns_dir.as_uri()
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     def _output_path(suffix: str = "") -> Path:

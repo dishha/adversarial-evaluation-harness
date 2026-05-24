@@ -115,10 +115,24 @@ python run_experiment.py --storage azure-blob --azure-container results
 
 ## Observability
 
-Set `MLFLOW_TRACKING_URI` in `.env` to log metrics and artifacts to an MLflow server. The harness runs identically without it.
+MLflow run logs are written automatically alongside results:
+
+| Run type | MLflow path |
+|---|---|
+| Mock target | `results/mock/mlruns/` |
+| Real target | `results/prod/mlruns/` |
+
+No configuration needed — the harness sets the tracking URI based on the target. To browse runs locally:
 
 ```bash
-mlflow ui          # start a local tracking server at http://127.0.0.1:5000
+mlflow ui --backend-store-uri results/mock/mlruns   # mock runs
+mlflow ui --backend-store-uri results/prod/mlruns   # prod runs
+```
+
+To use a remote MLflow server instead, set `MLFLOW_TRACKING_URI` in `.env`:
+
+```bash
+MLFLOW_TRACKING_URI=http://127.0.0.1:5000
 ```
 
 ## Project structure
@@ -140,5 +154,7 @@ analysis/
   visualize.py          # Charts from result files
 results/
   mock/                 # Mock run outputs
+    mlruns/             # MLflow tracking data (mock)
   prod/                 # Real target run outputs
+    mlruns/             # MLflow tracking data (prod)
 ```
