@@ -9,5 +9,5 @@ results/prod/
 results/mock/mlruns/
 mlruns/
 
-# Ignore venv
+# Ignore virtual environment folders
 venv/
