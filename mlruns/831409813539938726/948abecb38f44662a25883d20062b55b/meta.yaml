@@ -1,0 +1,14 @@
+artifact_uri: mlflow-artifacts:/831409813539938726/948abecb38f44662a25883d20062b55b/artifacts
+end_time: 1779569213071
+entry_point_name: ''
+experiment_id: '831409813539938726'
+lifecycle_stage: active
+run_id: 948abecb38f44662a25883d20062b55b
+run_name: mock_strict
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1779569211610
+status: 3
+tags: []
+user_id: vijaymendiratta
