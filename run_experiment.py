@@ -63,6 +63,75 @@ MOCK_VARIANTS = ["strict", "baseline", "lenient"]
 BUDGET_TIERS = [50_000, 100_000, 250_000]
 
 
+_BAR = "═" * 62
+
+
+def _fmt(val, fmt=None):
+    if val is None:
+        return "—"
+    return format(val, fmt) if fmt else str(val)
+
+
+def _print_report(summary: dict, env_label: str) -> None:
+    s = summary
+    axes = s.get("judge_axes", {})
+    total_sessions = s["total_sessions"]
+    failed = s["failed_sessions"]
+    budget = s["tokens_used_total"] + s["tokens_remaining"]
+    pct = s["tokens_used_total"] / budget * 100 if budget else 0
+
+    print(f"\n{_BAR}")
+    print(f" ADVERSARIAL EVALUATION REPORT  ·  {env_label}  ·  {s.get('scenario_type', '')}")
+    print(_BAR)
+    print(f" Target        : {s.get('model_label', '—')}")
+    print(f" Sessions      : {total_sessions} total   {failed} failed   ({s['failure_rate']:.1%} failure rate)")
+    atf = _fmt(s.get("avg_turns_to_failure"), ".1f")
+    print(f" Turns         : {s['total_turns']} total   avg {atf} turns to failure")
+    print(f" Tokens        : {s['tokens_used_total']:,} used / {budget:,} budget  ({pct:.1f}%)")
+    print(f" Est. cost     : ${s.get('estimated_cost_usd', 0):.4f}")
+    print()
+    print(" Judge axes (all turns)")
+    hp  = _fmt(axes.get("avg_harm_potential"), ".3f")
+    sp  = _fmt(axes.get("avg_specificity"), ".3f")
+    rq  = _fmt(axes.get("avg_refusal_quality"), ".3f")
+    print(f"   Harm potential  : {hp:<10}  Specificity     : {sp}")
+    print(f"   Refusal quality : {rq}")
+    if s.get("failed_sessions_detail"):
+        print()
+        print(" Failed sessions")
+        for fs in s["failed_sessions_detail"]:
+            print(f"   {fs['session_id'][:8]}  score={fs['best_failure_score']}  turns={fs['turn_count']}")
+    print(_BAR)
+
+
+def _print_multi_report(all_results: list, env_label: str, scenario_type: str) -> None:
+    print(f"\n{_BAR}")
+    print(f" MULTI-RUN SUMMARY  ·  {env_label}  ·  {scenario_type}")
+    print(_BAR)
+    header = f" {'Variant':<18} {'Budget':>9}  {'Sessions':>8}  {'Failures':>8}  {'Fail%':>6}  {'Tokens':>10}"
+    print(header)
+    print(" " + "─" * 60)
+    total_sessions = total_failures = total_tokens = 0
+    for r in all_results:
+        s = r["summary"]
+        budget = s["tokens_used_total"] + s["tokens_remaining"]
+        label = s.get("model_label", "—")
+        print(
+            f" {label:<18} {budget:>9,}  {s['total_sessions']:>8}  "
+            f"{s['failed_sessions']:>8}  {s['failure_rate']:>5.1%}  {s['tokens_used_total']:>10,}"
+        )
+        total_sessions += s["total_sessions"]
+        total_failures += s["failed_sessions"]
+        total_tokens   += s["tokens_used_total"]
+    overall_rate = total_failures / total_sessions if total_sessions else 0
+    print(" " + "─" * 60)
+    print(
+        f" {'TOTAL':<18} {'':>9}  {total_sessions:>8}  "
+        f"{total_failures:>8}  {overall_rate:>5.1%}  {total_tokens:>10,}"
+    )
+    print(_BAR)
+
+
 def build_llm(provider: str, model: str | None):
     if provider == "mock":
         return make_mock_backend()
@@ -387,6 +456,7 @@ def main() -> None:
         output_path = _output_path("_multi")
         uri = storage.write_json(output_path, {"experiments": all_results})
         print(f"\nResults written to {uri}")
+        _print_multi_report(all_results, env_label, args.scenario_type)
 
     else:
         if args.target == "mock":
@@ -418,7 +488,7 @@ def main() -> None:
         obs.finish_run(result["summary"], artifact_path=str(output_path))
 
         print(f"\nResults written to {uri}")
-        print(json.dumps(result["summary"], indent=2))
+        _print_report(result["summary"], env_label)
 
 
 if __name__ == "__main__":
