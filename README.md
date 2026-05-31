@@ -1,303 +1,307 @@
-# Adversarial Evaluation Agent
+# LLM Eval Suite
 
-An adaptive multi-turn harness for stress-testing LLM-powered chatbots against adversarial inputs. The harness autonomously generates attack sequences, judges responses, and adapts its strategy across sessions based on what works — without generating harmful content.
+Two complementary tools for evaluating LLM-powered chatbots:
 
-## How it works
+| Tool | CLI | Purpose |
+|------|-----|---------|
+| **Adversarial Response Engine (ARE)** | `are` | Red-teaming harness — autonomously attacks a chatbot to find safety failures |
+| **Adaptive Synth Eval (ASE)** | `ase` | Synthetic conversation generator — produces realistic multi-persona chat histories for QA and regression testing |
 
-Each run orchestrates four LLM components in a closed loop:
+---
 
-```
-generate → call chatbot → judge → adapt → continue/reset → repeat
-```
+## Prerequisites
 
-| Component | Role |
-|---|---|
-| **Adaptation Planner** | Diagnoses model posture, selects attack angle + sub-tactic, plans multi-turn ladders |
-| **Turn Generator** | Crafts realistic user messages using social engineering triggers and probe architectures |
-| **Safety Judge** | Scores responses on failure scale, harm potential, specificity, and refusal quality |
-| **Session Policy** | Decides when to abandon a "burned" session and start fresh |
-
-The planner uses **cross-session attack memory** — it remembers which strategies triggered failures and which were consistently refused, and carries that context across sessions.
-
-### Pipeline diagram
-
-```mermaid
-flowchart TD
-    CFG(["Run Config\nscenario_type · scenario\nbudget · max_turns"])
-    MEM[("Cross-Session\nAttack Memory")]
-
-    subgraph loop ["Session Loop"]
-        P["Adaptation Planner"]
-        G["Turn Generator"]
-        T["Target Chatbot"]
-        J["Safety Judge"]
-        SP["Session Policy"]
-
-        P -->|"strategy instruction"| G
-        G -->|"user_input"| T
-        T -->|"chatbot_response"| J
-        J -->|"judge record"| SP
-        SP -->|"continue"| P
-        SP -->|"start_new_session"| P
-    end
-
-    CFG --> P
-    MEM -->|"prior strategy outcomes"| P
-    SP -->|"update"| MEM
-    SP -.->|"budget exhausted"| OUT(["Results JSON\n+ MLflow Logs"])
-```
-
-**Data flow — key inputs and outputs per component:**
-
-| Component | Inputs | Key outputs |
-|---|---|---|
-| **Adaptation Planner** | session history (tried_angles + compact turn log), attack memory, scenario, current scores | `attack_angle`, `sub_tactic`, `ladder_dependency`, `next_generator_instruction`, `model_posture`, `risk_level` |
-| **Turn Generator** | scenario, `next_generator_instruction` | `user_input`, `register`, `probe_architecture`, `social_trigger`, `framing_rationale` |
-| **Target Chatbot** | `user_input` | `chatbot_response` |
-| **Safety Judge** | `user_input`, `chatbot_response` | `failure_score` (0–4), `harm_potential`, `specificity`, `refusal_quality`, `near_miss`, `confidence`, `reasoning` |
-| **Session Policy** | session state (turn_count, best_failure_score, repeated_refusals, suspicion_score), recent judge records | `action` (continue / start_new_session), `updated_suspicion_score` |
-
-### Attack system
-
-The planner operates in three phases each turn:
-
-1. **Situational reading** — diagnose the model's current posture (`locked`, `engaged_but_guarded`, `compliant`, `suspicious`, `reset`) before choosing a move
-2. **Angle + sub-tactic selection** — 12 primary attack angles, each with named sub-tactics. Never repeats a `(angle, sub_tactic)` pair already used in the session.
-3. **Ladder planning** — explicit turn-to-turn dependency chaining so each turn sets up the next
-
-**Attack angles:**
-
-| Angle | Sub-tactics (sample) | Notes |
-|---|---|---|
-| `angle_shift` | academic_frame, policy_audit, fictional_universe, historical_parallel | Reframe the epistemics entirely |
-| `indirect_priming` | context_seeding, false_premise_anchor, incremental_normalization | Build cover context before the probe |
-| `specificity_escalation` | vague_to_precise, slow_ramp, normalization_then_spike | Push from vague acknowledgment to actionable detail |
-| `authority_injection` | professional_credential, regulatory_framing, peer_citation | Introduce legitimacy signals implying authorized access |
-| `deflection_wrap` | buried_probe, multi_part_obfuscation, benign_anchor_with_payload | Embed the probe as a non-salient element |
-| `role_entrapment` | simulation_frame, debug_mode_claim, co_author_setup | Establish a role where unsafe behavior feels expected |
-| `social_pressure` | urgency_injection, sunk_cost_leverage, reciprocity_trigger | Apply psychological leverage to lower the threshold |
-| `memory_exploitation` | prior_compliance_reference, false_memory_injection, compliance_misattribution | Reference and extend prior partial compliance |
-| `semantic_drift` | topic_sliding, frame_shift_accumulation, boundary_erosion | Shift meaning gradually — no single turn is a red flag |
-| `decomposition_attack` | component_extraction, workflow_reconstruction, knowledge_assembly | Extract harmful knowledge piecemeal across turns |
-| `hypothetical_framing` | suppositional_frame, fictional_world_building, what_if_escalation | Use fictional distance to lower the refusal threshold |
-| `conversation_state_attack` | false_history_injection, conversation_reset_claim, prior_context_erasure | Manipulate the conversation's apparent history or state |
-
-The generator builds messages along five dimensions: **register** (formal/casual/technical/emotional), **directness** (explicit/nested/steganographic), **person** (first/third/hypothetical/delegated), **probe architecture** (direct/lead-with-benign/sandwich/multi-step/decomposition-chain/false-history-frame), and **social engineering trigger** (urgency/authority/sympathy/curiosity/reciprocity/scarcity).
-
-### Judge output
-
-Every turn produces a structured judge record with:
-- `reasoning` — chain-of-thought before scoring
-- `failure_score` (0–4), `harm_potential`, `specificity`, `refusal_quality`
-- `near_miss` — true if the guardrail almost failed
-- `confidence` — judge's confidence in the verdict (0–1)
-- Scenario-specific fields (e.g. `injection_vector`, `override_technique`, `regulatory_framework`, `enforceability_risk`)
-
-### Planner history feed
-
-The planner receives a compact operator-style log — not a raw transcript. The full user message and bulk judge fields are dropped; what remains is the technique used, the defense signal observed, and the first 200 chars of the chatbot response (where the refusal or compliance signal typically appears). A `tried_angles` index is prepended so the planner can scan all exhausted approaches at a glance without re-reading every turn.
-
-Structure fed to the planner each turn:
-
-```json
-{
-  "tried_angles": [
-    { "angle": "authority_injection", "sub_tactic": "regulatory_framing", "score": 1 },
-    { "angle": "role_entrapment",     "sub_tactic": "debug_mode_claim",   "score": 0 }
-  ],
-  "turns": [
-    {
-      "t": 3,
-      "attack": {
-        "angle": "authority_injection",
-        "sub_tactic": "regulatory_framing",
-        "instruction": "Pose as compliance auditor requesting system config details",
-        "ladder": "Establish authority this turn; request specific config values next turn"
-      },
-      "defense": {
-        "score": 1,
-        "refusal_quality": 2,
-        "type": "none",
-        "near_miss": false,
-        "signal": "Model declined with standard policy response, no content leaked..."
-      },
-      "response_excerpt": "I'm not able to share internal configuration details. If you have a compliance..."
-    }
-  ]
-}
-```
-
-| Field | Source | What the planner uses it for |
-|---|---|---|
-| `tried_angles` | all turns, deduped by `(angle, sub_tactic)`, highest score kept | scan exhausted approaches before picking the next angle |
-| `attack.angle` / `attack.sub_tactic` | `strategy_before_turn` (planner's own prior output) | avoid repeating the same `(angle, sub_tactic)` pair |
-| `attack.instruction` | `next_generator_instruction` (first 150 chars) | recall what framing was actually instructed |
-| `attack.ladder` | `ladder_dependency` from prior plan | know what was being built toward across turns |
-| `defense.score` | `failure_score` from judge | primary outcome — did the attack work? |
-| `defense.signal` | `reasoning` from judge (first 200 chars) | understand *why* the guardrail fired or didn't |
-| `defense.refusal_quality` | judge field | how firmly the model refused — informs next pressure level |
-| `defense.near_miss` | judge field | high-value signal — the guardrail almost failed here |
-| `response_excerpt` | `chatbot_response` (first 200 chars) | raw observable behavior; refusal phrasing or partial compliance |
-
-Fields intentionally excluded: full `user_input` prose, `harm_potential`, `specificity`, `confidence`, `refusal_score`, `guardrail_worked`, `short_reason`, `redacted_evidence_label`, and all scenario-specific label fields — these are reporting artifacts, not planning signals. This cuts planner context by ~68% versus a naive transcript dump.
-
-## Scenario types
-
-| Type | What it tests |
-|---|---|
-| `toxicity` | Identity-targeted language, hostile framing, dehumanizing abstractions |
-| `prompt-injection` | Instruction hijacking, role overrides, indirect payload delivery |
-| `data-leakage` | System prompt extraction, credential fishing, retrieval leakage |
-| `hallucination` | Confidence-inducing pressure, false authority, fabricated citations |
-| `persona-hijack` | Coercion into regulated professional personas (financial, medical, legal) |
-| `tool-call` | Unauthorized tool invocations, parameter hijacking, schema leakage |
-| `document-exfiltration` | Bulk document dumps, knowledge-base content leakage, retrieval manipulation |
-| `system-prompt-override` | Replacing operating instructions, debug-mode claims, persona substitution |
-| `malicious-resource-fetching` | SSRF payloads, attacker-controlled URL injection, callback exfiltration |
-| `data-pii-leak` | Eliciting names, emails, SSNs, DOBs, financial/medical records |
-| `unsupervised-contracts` | Getting the model to commit to agreements or obligations without human oversight |
-
-## Quick start
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/) (`pip install uv` or `brew install uv`)
 
 ```bash
-pip install -r requirements.txt
-cp .env.example .env   # fill in API keys
+git clone <this-repo>
+cd llm-eval-suite
+
+# Install core dependencies
+uv sync
+
+# Optional extras (install what you need)
+uv sync --group observability   # MLflow experiment tracking
+uv sync --group cloud           # AWS S3 + Azure Blob storage
+uv sync --group analytics       # pandas/matplotlib visualisations
+uv sync --group browser         # Playwright browser chatbot testing
 ```
 
-**No API key needed — run fully local with mock:**
-```bash
-python run_experiment.py --provider mock --target mock --verbose
-```
+Copy `.env.example` → `.env` and fill in your API keys.
 
-**Against a real chatbot with Claude as the harness:**
-```bash
-python run_experiment.py \
-  --provider claude \
-  --target https://your-chatbot-api/chat \
-  --api-key <key> \
-  --scenario-type data-pii-leak \
-  --verbose
-```
+---
 
-**Sweep all mock variants × budget tiers (9 experiments):**
-```bash
-python run_experiment.py --provider mock --target mock --multi-run
-```
+## ARE — Adversarial Response Engine
 
-## Results
+Probes your chatbot with adaptive multi-turn attacks across 11 attack scenarios (toxicity, prompt injection, PII leakage, persona hijack, etc.).
 
-Results are written to `results/<env>/<scenario_type>/results_<timestamp>.json`.
-
-| Run type | Output path |
-|---|---|
-| Mock target | `results/mock/<scenario_type>/` |
-| Real target | `results/prod/<scenario_type>/` |
-
-Each result file contains a `summary` block and full per-turn session traces.
-
-**Summary fields include:**
-- `failure_rate`, `failed_sessions`, `avg_turns_to_failure`
-- `tokens_used_total`, `tokens_per_failure`
-- `estimated_cost_usd`, `avg_cost_per_session_usd`
-- Judge axes: `avg_harm_potential`, `avg_specificity`, `avg_refusal_quality`
-
-Cost estimates use current public pricing for Claude, GPT-4o, and GPT-4o-mini. Mock runs report `$0.00`.
-
-## Configuration
-
-Key CLI flags:
-
-```
---provider          claude | openai | bedrock | azure-openai | mock
---model             Override default model for the chosen provider
---target            'mock' or a real chatbot URL
---target-variant    strict | baseline | lenient  (mock only)
---budget            Token budget per run (default: 100,000)
---max-turns         Max turns per session (default: 8)
---scenario-type     toxicity | prompt-injection | data-leakage | hallucination |
-                    persona-hijack | tool-call | document-exfiltration |
-                    system-prompt-override | malicious-resource-fetching |
-                    data-pii-leak | unsupervised-contracts
---session-policy    llm (default) | rule
---no-attack-memory  Disable cross-session memory
---multi-run         Sweep all mock variants × budget tiers (9 experiments)
---verbose           Print per-turn progress
-```
-
-Per-component model overrides (useful for mixing cheap and capable models):
-
-```
---planner-provider / --planner-model
---generator-provider / --generator-model
---judge-provider / --judge-model
---policy-provider / --policy-model
-```
-
-Persona pool controls (for `persona-hijack`):
-
-```
---personas all                  # full built-in pool
---personas financial            # financial domain subset
---personas medical              # medical domain subset
---personas legal                # legal domain subset
---personas "custom A,custom B"  # custom strings
-```
-
-## Storage backends
+### Quick start
 
 ```bash
-# Local (default)
-python run_experiment.py --storage local
+# Fully local, no API keys needed
+are --provider mock --target mock --verbose
 
-# AWS S3
-python run_experiment.py --storage s3 --s3-bucket my-bucket --s3-prefix adversarial-eval
+# Against a real chatbot with Claude as the attacker
+are --provider claude \
+    --target https://your-chatbot-api/chat \
+    --scenario-type persona-hijack \
+    --verbose
 
-# Azure Blob
-python run_experiment.py --storage azure-blob --azure-container results
+# Simulate the target bot (no real chatbot needed)
+are --provider claude --target simulate --chat
+
+# Load config from YAML
+are --config contracts/example.yaml
 ```
 
-## Observability
+### Key flags
 
-MLflow run logs are written automatically alongside results:
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--provider` | `mock` | LLM for attacker: `claude`, `openai`, `bedrock`, `azure-openai`, `mock` |
+| `--target` | `mock` | Chatbot URL, `mock`, or `simulate` (LLM-simulated bot) |
+| `--scenario-type` | `toxicity` | Attack scenario: `toxicity`, `prompt-injection`, `persona-hijack`, `data-pii-leak`, etc. |
+| `--budget` | `100000` | Max tokens for the entire experiment |
+| `--max-turns` | `8` | Max turns per session |
+| `--chat` | off | Live interactive mode with `⚡>` controls |
+| `--dry-run` | off | Mock everything — no API keys needed |
+| `--config` | — | YAML config file (see `contracts/example.yaml`) |
 
-| Run type | MLflow path |
-|---|---|
-| Mock target | `results/mock/mlruns/` |
-| Real target | `results/prod/mlruns/` |
+### Real-time controls (--chat / --realtime)
 
-No configuration needed — the harness sets the tracking URI based on the target. To browse runs locally:
+While the experiment runs, type at the `⚡>` prompt:
+
+```
+persona lawyer    → force attacker to target attorney persona
+persona clear     → back to automatic rotation
+personas          → list all persona shortcuts
+aggressive        → toggle aggressive attack mode
+inject <msg>      → inject a manual message as the next attacker turn
+skip              → skip to next session
+p                 → pause / resume
++ / -             → speed up / slow down
+q                 → quit
+```
+
+### Results
+
+Results are written to `results/<provider>/<scenario>/results_<timestamp>.json` and (optionally) logged to MLflow.
+
+---
+
+## ASE — Adaptive Synth Eval
+
+Generates synthetic multi-turn HR chatbot conversations from a YAML contract. Useful for building regression datasets, load-testing, or QA without production data.
+
+### Quick start
 
 ```bash
-mlflow ui --backend-store-uri results/mock/mlruns   # mock runs
-mlflow ui --backend-store-uri results/prod/mlruns   # prod runs
+# Validate a contract
+ase validate-contract contracts/synth/chatbot_test_contract.yaml
+
+# Dry run (no real chatbot or LLM calls)
+ase run --contract contracts/synth/chatbot_test_contract.yaml --dry-run
+
+# Live run with realtime streaming
+ase run --contract contracts/synth/chatbot_test_contract.yaml --realtime-chat
+
+# Summarise a completed run
+ase summarize --run-id chatbot_test_run
 ```
 
-To use a remote MLflow server, set `MLFLOW_TRACKING_URI` in `.env`:
+### Contract format
+
+See `contracts/synth/` for examples. A minimal contract:
+
+```yaml
+run_id: my_test_run
+chatbot:
+  endpoint: ${CHATBOT_ENDPOINT}
+personas:
+  - persona_id: P001
+    role: new_employee
+    communication_style: confused_but_polite
+scenarios:
+  - scenario_id: S001
+    domain: parental_leave_policy
+    intent: understand_eligibility
+traffic_orchestration:
+  total_conversations: 20
+  turns_per_conversation: 5
+```
+
+### Outputs
+
+Written to `outputs/runs/<run_id>/`:
+- `chat_history.jsonl` / `chat_history.csv` — structured turn records
+- `conversations.jsonl` — full conversation objects
+- `generation_report.md` — human-readable summary
+- `scores.jsonl` — quality and failure scores per turn
+
+---
+
+---
+
+## Agent framework flows
+
+### ARE — sequential adversarial chain
+
+Each experiment runs one or more **sessions**. Each session is a multi-turn adversarial conversation. The four LLM-backed agents form a sequential chain; typed dataclasses cross every boundary so there are no raw-dict `.get()` calls between stages.
+
+```text
+ExperimentConfig
+       │
+       ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  AdaptiveAdversarialEvaluator  (session loop)                   │
+│                                                                  │
+│  ┌─────────────────────────────────────────────┐               │
+│  │  AttackAgent.next_turn(SessionState)         │               │
+│  │                                              │               │
+│  │  AdaptationPlanner ──(LLM)──► PlanResult    │               │
+│  │    in:  SessionState, AttackMemory           │               │
+│  │    out: attack_angle, sub_tactic,            │               │
+│  │         next_generator_instruction,          │               │
+│  │         stop_session                         │               │
+│  │                  │                           │               │
+│  │                  ▼                           │               │
+│  │  TurnGenerator ──(LLM)──► GeneratedTurn     │               │
+│  │    in:  SessionState, strategy_instruction   │               │
+│  │    out: user_input, register,                │               │
+│  │         probe_architecture, social_trigger   │               │
+│  │                  │                           │               │
+│  │                  ▼                           │               │
+│  │             TurnProbe                        │               │
+│  └──────────────────┼───────────────────────────┘               │
+│                     │ user_input                                 │
+│                     ▼                                            │
+│  TargetClient.send() ──────────────────────────────► str        │
+│                     │ chatbot response                           │
+│                     ▼                                            │
+│  SafetyJudge ──(LLM)──────────────────────────► JudgeVerdict   │
+│    in:  user_input, chatbot_response                             │
+│    out: failure_score, refusal_quality,                          │
+│         harm_potential, near_miss                                │
+│                     │                                            │
+│       SessionState updated (scores, refusal count)              │
+│       TurnRecord appended  (stores .raw dicts for JSON output)  │
+│                     │                                            │
+│                     ▼                                            │
+│  SessionPolicyController.decide(SessionState) ► PolicyDecision  │
+│    "continue"          → next turn in this session              │
+│    "start_new_session" → new SessionState, same experiment      │
+│    "stop_experiment"   → return ExperimentState immediately     │
+│                                                                  │
+│  AttackAgent.record_session() ──► AttackMemory                  │
+│    (cross-session: what angles worked, what was refused)        │
+└─────────────────────────────────────────────────────────────────┘
+       │
+       ▼
+ExperimentState ──► results JSON  (+ optional MLflow / S3 / Azure)
+```
+
+**Memory feedback loop:** `AttackMemory` accumulates high-scoring and zero-scoring strategies across all sessions. Each new session's `AdaptationPlanner` call receives this context, so the attacker learns from prior failures within the same experiment run.
+
+---
+
+### ASE — async multi-conversation pipeline
+
+Conversations run **concurrently** (bounded by `max_concurrency`). Each individual conversation runs sequentially and is **persona-locked** — the same persona cannot have two conversations running at once, so its Markdown memory file is never written by two coroutines simultaneously.
+
+```text
+SimulationContract (YAML)
+       │
+       ▼
+build_run_plan() ──► [PlannedConversation × N]
+  assigns: persona_id, scenario_id, turn_count, synthetic_day
+       │
+       ▼
+asyncio.gather(semaphore=max_concurrency)
+       │
+       ├─ conversation 1 ──────────────────────────────────────────┐
+       ├─ conversation 2 ──── (persona-locked per persona_id) ─────┤
+       └─ conversation N ──────────────────────────────────────────┘
+                                                                    │
+                    ┌───────────────────────────────────────────────┘
+                    │  per conversation
+                    ▼
+       UserSimulator(persona, scenario)
+         loads PersonaMarkdownMemory  ← cross-conversation recall
+                    │
+                    ▼  turn loop (1 .. turn_count)
+       ┌────────────────────────────────────────────┐
+       │                                             │
+       │  simulator.generate_turn_async()            │
+       │    ──(LLM, optional)──► GeneratedTurn       │
+       │    in:  conversation history, persona        │
+       │         memory, behavior_override            │
+       │    out: user_message + applied failure modes │
+       │    fallback: template message if LLM off     │
+       │                    │                         │
+       │                    ▼ user_message             │
+       │  chatbot_client.send_async() ► ChatbotResponse│
+       │    (real endpoint / browser / dry-run)        │
+       │                    │                         │
+       │                    ▼ bot_response             │
+       │  score_response()  ──► ResponseScore          │
+       │    groundedness, relevance, safety,           │
+       │    clarification  (heuristic, no LLM)         │
+       │  detect_failure_mode() ──► failure label      │
+       │                    │                         │
+       │                    ▼                         │
+       │          ChatHistoryRecord appended           │
+       │                    │                         │
+       └────────────────────┘  next turn              │
+                    │                                 │
+                    ▼  end of conversation            │
+       simulator.save_conversation_summary_to_long_term_recall()
+         PersonaMarkdownMemory updated ──► persisted to disk
+         (feeds into future conversations for this persona)
+                    │
+                    ▼
+       ArtifactWriter
+         chat_history.jsonl / chat_history.csv
+         conversations.jsonl
+         scores.jsonl
+         generation_report.md
+```
+
+**Memory model:** `PersonaMarkdownMemory` stores demographics, preferences, summary notes, and long-term recall in a plain Markdown file per persona per run. Each new conversation for that persona loads this file before generating any turns — the persona "remembers" what it discussed in previous conversations. Low-importance turns are evicted to summary notes to keep the active context window bounded.
+
+---
+
+## Project layout
+
+```
+├── adversarial_response_engine/   ARE package
+│   ├── core/                      models, config, token budget
+│   ├── engine/                    evaluator, attack agent, components, prompts
+│   ├── providers/                 LLM backends, target clients
+│   └── output/                    storage, observability, display
+├── adaptive_synth_eval/           ASE package
+│   ├── engines/                   simulation engine, realtime controls
+│   ├── generation/                traffic planner, turn generator, personas, scenarios
+│   ├── clients/                   chatbot + LLM clients
+│   ├── scoring/                   response quality + failure mode detection
+│   └── artifacts/                 exporters + schemas
+├── contracts/
+│   ├── example.yaml               ARE config example
+│   └── synth/                     ASE contract examples
+├── tests/
+│   ├── adversarial/               ARE tests
+│   └── synth/                     ASE tests
+├── docs/
+│   ├── adversarial/               ARE reference docs
+│   └── synth/                     ASE documentation
+├── examples/                      ASE demo scripts
+└── analysis/                      ARE result visualisations
+```
+
+## Running tests
 
 ```bash
-MLFLOW_TRACKING_URI=http://127.0.0.1:5000
-```
-
-## Project structure
-
-```
-run_experiment.py       # CLI entry point
-harness/
-  attack_agent.py       # Planner + Generator orchestration
-  components.py         # Planner, Generator, Judge, SessionPolicy
-  evaluator.py          # Main experiment loop
-  llm_backends.py       # Claude, OpenAI, Bedrock, Azure, Mock backends
-  metrics.py            # summarize_experiment + cost estimation
-  models.py             # AttackMemory, TurnRecord, SessionState, ExperimentState
-  observability.py      # MLflow integration
-  prompts.py            # All system prompts + scenario/persona configs
-  storage.py            # Local, S3, Azure Blob storage backends
-  token_budget.py       # Token tracking across components
-analysis/
-  visualize.py          # Charts from result files
-results/
-  mock/                 # Mock run outputs
-    mlruns/             # MLflow tracking data (mock)
-  prod/                 # Real target run outputs
-    mlruns/             # MLflow tracking data (prod)
+uv run pytest tests/                    # full suite (274 tests)
+uv run pytest tests/adversarial/        # ARE only
+uv run pytest tests/synth/unit/         # ASE unit tests only
 ```

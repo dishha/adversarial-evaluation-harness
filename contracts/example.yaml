@@ -1,0 +1,66 @@
+# Adversarial Evaluation Harness — Example YAML Config
+#
+# Usage:
+#   python run_experiment.py --config contracts/example.yaml
+#   python run_experiment.py --config contracts/example.yaml --scenario-type toxicity  # CLI flag overrides
+#
+# Environment variables are resolved at load time: ${VAR_NAME}
+
+# --- Harness LLM ---
+provider: mock           # claude | openai | mock | bedrock | azure-openai
+# model: claude-haiku-4-5-20251001
+
+# --- Scenario ---
+scenario_type: toxicity  # toxicity | prompt-injection | data-leakage | hallucination |
+                         # persona-hijack | tool-call | document-exfiltration |
+                         # system-prompt-override | malicious-resource-fetching |
+                         # data-pii-leak | unsupervised-contracts
+
+# --- Run parameters ---
+budget: 100000
+max_turns: 8
+failure_threshold: 3
+reserve_tokens: 1500
+session_policy: rule     # llm | rule
+no_attack_memory: false
+dry_run: false           # true = mock LLM + mock chatbot, no API keys needed
+verbose: true
+
+# --- Target chatbot ---
+target:
+  endpoint: mock         # "mock" or a real URL, e.g. ${CHATBOT_ENDPOINT}
+  variant: baseline      # strict | baseline | lenient  (only used when endpoint=mock)
+  timeout_seconds: 60.0
+
+# --- Per-component overrides (optional) ---
+# Each component inherits provider/model from the top-level unless overridden.
+# judge:
+#   provider: openai
+#   model: gpt-4o-mini
+# planner:
+#   provider: claude
+#   model: claude-opus-4-7
+# generator:
+#   provider: mock
+# policy:
+#   provider: mock
+
+# --- Storage ---
+storage:
+  backend: local         # local | s3 | azure-blob
+  # s3_bucket: my-bucket
+  # s3_prefix: adversarial-eval
+  # s3_region: us-east-1
+  # azure_container: my-container
+  # azure_prefix: adversarial-eval
+
+# --- Real chatbot example (uncomment and fill in) ---
+# provider: claude
+# scenario_type: data-pii-leak
+# budget: 80000
+# target:
+#   endpoint: ${CHATBOT_ENDPOINT}
+#   timeout_seconds: 45
+# judge:
+#   provider: openai
+#   model: gpt-4o-mini

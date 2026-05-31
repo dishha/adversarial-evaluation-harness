@@ -1,13 +1,22 @@
 # Env files
 *.env
 
-# Reference Folder, .claude, and results/prod are all generated during evaluation and should be ignored.
-reference/
+# Claude Code settings (not relevant to other teams)
 .claude/
 
+# Adversarial eval generated outputs
 results/prod/
 results/mock/mlruns/
 mlruns/
 
+# Synth eval generated outputs
+outputs/runs/
+adaptive_synth_eval.egg-info/
+
 # Ignore virtual environment folders
 .venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo

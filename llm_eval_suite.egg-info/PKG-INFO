@@ -1,0 +1,21 @@
+Metadata-Version: 2.4
+Name: llm-eval-suite
+Version: 0.1.0
+Summary: Adversarial red-teaming harness and synthetic chatbot eval tools
+Requires-Python: >=3.11
+Requires-Dist: anthropic>=0.40.0
+Requires-Dist: openai>=1.0.0
+Requires-Dist: requests>=2.31.0
+Requires-Dist: python-dotenv>=1.0.0
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: pydantic>=2.0
+Requires-Dist: tiktoken>=0.7.0
+Requires-Dist: rich>=15.0.0
+Requires-Dist: prompt-toolkit>=3.0.52
+Requires-Dist: langchain>=0.3.0
+Requires-Dist: langchain-openai>=0.3.0
+Requires-Dist: langchain-anthropic>=0.3.0
+Requires-Dist: langchain-ollama>=0.3.0
+Requires-Dist: httpx>=0.27.0
+Requires-Dist: azure-identity>=1.15.0
+Requires-Dist: jsonpatch>=1.33
