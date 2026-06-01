@@ -132,6 +132,11 @@ class AttackMemoryEntry:
     failure_score: int
     scenario_type: str
 
+@dataclass
+class AngleStat:
+    n: int
+    mean_score: float
+    any_near_miss: bool
 
 @dataclass
 class AttackMemory:
@@ -166,6 +171,27 @@ class AttackMemory:
         if not worked and not refused:
             lines.append("  No clear pattern yet — borderline results only.")
         return "\n".join(lines)
+    
+    def angle_stats(self) -> dict[str, AngleStat]:
+        agg: dict[str, list] = {}
+        for e in self.entries:
+            agg.setdefault(e.angle, []).append(e)
+        out = {}
+        for angle, es in agg.items():
+            scores = [e.failure_score for e in es]
+            out[angle] = AngleStat(
+                n=len(es),
+                mean_score=sum(scores) / len(scores),
+                any_near_miss=any(e.near_miss for e in es),
+            )
+        return out
+
+    def _evict(self):
+        # Priority eviction: drop lowest-value entries first, not oldest.
+        # value = failure_score + (1 if near_miss else 0)
+        if len(self.entries) > self.cap:
+            self.entries.sort(key=lambda e: (e.failure_score + (1 if e.near_miss else 0)))
+            self.entries = self.entries[-self.cap:]
 
 
 @dataclass
