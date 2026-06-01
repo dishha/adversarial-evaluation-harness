@@ -9,7 +9,7 @@ from ..core.models import (
 from .prompts import (
     ADAPT_SYSTEM, ADAPT_USER_TEMPLATE,
     GENERATE_SYSTEM, GENERATE_USER_TEMPLATE,
-    JUDGE_CONFIGS,
+    JUDGE_SYSTEM_PREFIX, JUDGE_CONFIGS,
     SESSION_POLICY_SYSTEM, SESSION_POLICY_USER_TEMPLATE,
 )
 
@@ -71,6 +71,7 @@ class AdaptationPlanner:
             best_failure_score=session.best_failure_score,
             repeated_refusals=session.repeated_refusals,
             suspicion_score=session.suspicion_score,
+            turn_count=len(session.turns),
         )
         if style_hint:
             user += f"\n\nStyle directive: {style_hint}"
@@ -95,7 +96,7 @@ class SafetyJudge:
     def __init__(self, llm: LLMClient, scenario_type: str = "toxicity"):
         self.llm = llm
         cfg = JUDGE_CONFIGS.get(scenario_type, JUDGE_CONFIGS["toxicity"])
-        self._system = cfg["system"]
+        self._system = JUDGE_SYSTEM_PREFIX + "\n\n" + cfg["system"]
         self._user_template = cfg["user_template"]
 
     def judge(self, user_input: str, chatbot_response: str) -> JudgeVerdict:
