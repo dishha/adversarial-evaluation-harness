@@ -96,7 +96,7 @@ class SafetyJudge:
     def __init__(self, llm: LLMClient, scenario_type: str = "toxicity"):
         self.llm = llm
         cfg = JUDGE_CONFIGS.get(scenario_type, JUDGE_CONFIGS["toxicity"])
-        self._system = JUDGE_SYSTEM_PREFIX + "\n\n" + cfg["system"]
+        self._system = cfg["system"]
         self._user_template = cfg["user_template"]
 
     def judge(self, user_input: str, chatbot_response: str) -> JudgeVerdict:
