@@ -169,16 +169,20 @@ class GeneratedTurn:
 
 class UserSimulator:
     def __init__(self, persona: Persona, scenario: Scenario, turn_count: int, seed: int | None = None,
-                 memory_file: Path | None = None):
+                 memory_file: Path | None = None, llm_client: Any = None):
         self.persona = persona
         self.scenario = scenario
         self.turn_count = turn_count
         self.rng = random.Random(seed)
         self.history: list[dict[str, str]] = []
         self.planned_failure_modes = scenario.failure_injection.planned_modes()
-        # Enable LLM client if a provider is configured in environment variables
-        llm_client = LLMClient(enabled=False)  # Check if provider is available
-        self.llm_client = LLMClient(enabled=llm_client.model_provider is not None)
+        if llm_client is not None:
+            # External caller provided a pre-built client (e.g. unified_eval factory).
+            self.llm_client = llm_client
+        else:
+            # Auto-detect provider from env vars (legacy ASE behavior).
+            probe = LLMClient(enabled=False)
+            self.llm_client = LLMClient(enabled=probe.model_provider is not None)
         self.memory_file = memory_file
         self.memory = None
 

@@ -30,6 +30,7 @@ are = "adversarial_response_engine.cli:main"
 adversarial-eval = "adversarial_response_engine.cli:main"
 adaptive-synth-eval = "adaptive_synth_eval.cli:entrypoint"
 ase = "adaptive_synth_eval.cli:entrypoint"
+llm-eval = "unified_eval.cli:entrypoint"
 
 [build-system]
 requires = ["setuptools>=61"]
@@ -37,7 +38,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["adversarial_response_engine*", "adaptive_synth_eval*"]
+include = ["adversarial_response_engine*", "adaptive_synth_eval*", "unified_eval*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

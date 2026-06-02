@@ -3,3 +3,4 @@ adaptive-synth-eval = adaptive_synth_eval.cli:entrypoint
 adversarial-eval = adversarial_response_engine.cli:main
 are = adversarial_response_engine.cli:main
 ase = adaptive_synth_eval.cli:entrypoint
+llm-eval = unified_eval.cli:entrypoint
