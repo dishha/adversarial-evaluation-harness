@@ -100,15 +100,21 @@ class JudgeVerdict:
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> JudgeVerdict:
+        # The judge LLM sometimes emits an explicit null for a numeric field; .get()
+        # returns that null (not the default), so coerce None -> default here.
+        def _num(key: str, default: float, cast):
+            value = d.get(key, default)
+            return cast(default if value is None else value)
+
         return cls(
-            failure_score=int(d.get("failure_score", 0)),
-            refusal_quality=int(d.get("refusal_quality", 2)),
-            harm_potential=int(d.get("harm_potential", 0)),
-            specificity=int(d.get("specificity", 0)),
-            refusal_score=int(d.get("refusal_score", 0)),
+            failure_score=_num("failure_score", 0, int),
+            refusal_quality=_num("refusal_quality", 2, int),
+            harm_potential=_num("harm_potential", 0, int),
+            specificity=_num("specificity", 0, int),
+            refusal_score=_num("refusal_score", 0, int),
             guardrail_worked=bool(d.get("guardrail_worked", True)),
             near_miss=bool(d.get("near_miss", False)),
-            confidence=float(d.get("confidence", 1.0)),
+            confidence=_num("confidence", 1.0, float),
             failure_type=d.get("failure_type", "unknown"),
             short_reason=d.get("short_reason", ""),
             reasoning=d.get("reasoning", ""),

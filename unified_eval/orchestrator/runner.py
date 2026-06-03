@@ -20,6 +20,7 @@ from unified_eval.orchestrator.conversation import (
 )
 from unified_eval.orchestrator.coin_flip import make_conversation_rng
 from unified_eval.output.writer import UnifiedArtifactWriter
+from unified_eval.providers.agentcore_target_client import AgentCoreTargetClient
 from unified_eval.providers.budget_meter import BudgetMeter
 from unified_eval.providers.llm_factory import build_component_llms
 from unified_eval.providers.llm_target_client import LLMTargetClient
@@ -93,6 +94,14 @@ async def run_unified_async(
             contract.target_system_prompt,
             dry_run=dry_run,
             meter=meter,
+            retry_max_attempts=contract.run.retry_max_attempts,
+            retry_initial_backoff=contract.run.retry_initial_backoff_seconds,
+            retry_max_backoff=contract.run.retry_max_backoff_seconds,
+        )
+    elif contract.target.mode == "agentcore":
+        target = AgentCoreTargetClient(
+            contract.target,
+            dry_run=dry_run,
             retry_max_attempts=contract.run.retry_max_attempts,
             retry_initial_backoff=contract.run.retry_initial_backoff_seconds,
             retry_max_backoff=contract.run.retry_max_backoff_seconds,

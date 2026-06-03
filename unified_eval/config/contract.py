@@ -118,6 +118,12 @@ def parse_unified_contract(payload: dict[str, Any], *, base_path: Path | None = 
             "target.mode == 'llm' requires target.chatbot_llm config with provider/model."
         )
 
+    if target.mode == "agentcore" and not target.agent_runtime_arn:
+        raise ContractError(
+            "target.mode == 'agentcore' requires target.agent_runtime_arn "
+            "(set it directly or via ${AGENTCORE_RUNTIME_ARN})."
+        )
+
     return UnifiedContract(
         suite=suite,
         run=run,

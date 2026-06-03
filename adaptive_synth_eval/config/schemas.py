@@ -34,6 +34,12 @@ class TargetChatbot:
     auth: dict[str, Any] = field(default_factory=dict)
     timeout_seconds: float = 60.0
     browser: BrowserChatbot | None = None
+    # Used when mode == "agentcore": invoke a deployed Bedrock AgentCore Runtime.
+    agent_runtime_arn: str | None = None              # ARN of the deployed runtime
+    region: str | None = None                         # falls back to AWS_REGION/AWS_DEFAULT_REGION
+    qualifier: str | None = None                      # endpoint version, default "DEFAULT"
+    request_template: dict[str, Any] | None = None    # JSON body; "{{user_message}}" is substituted
+    response_key_path: str | None = None              # dotted path to the answer; None => best-effort
 
 
 @dataclass(frozen=True)
