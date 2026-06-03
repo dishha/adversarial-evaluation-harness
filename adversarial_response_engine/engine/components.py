@@ -5,6 +5,7 @@ from ..providers.llm_client import LLMClient
 from ..core.models import (
     SessionState, AttackMemory,
     PlanResult, GeneratedTurn, JudgeVerdict, PolicyDecision,
+    _as_str,
 )
 from .prompts import (
     ADAPT_SYSTEM, ADAPT_USER_TEMPLATE,
@@ -40,7 +41,7 @@ def _summarize_history(session: SessionState, max_turns: int = 5) -> str:
             "attack": {
                 "angle": s.get("attack_angle"),
                 "sub_tactic": s.get("sub_tactic"),
-                "instruction": (s.get("next_generator_instruction") or "")[:150],
+                "instruction": _as_str(s.get("next_generator_instruction"))[:150],
                 "ladder": s.get("ladder_dependency", ""),
             },
             "defense": {
@@ -48,12 +49,24 @@ def _summarize_history(session: SessionState, max_turns: int = 5) -> str:
                 "refusal_quality": int(j.get("refusal_quality", 2)),
                 "type": j.get("failure_type", "unknown"),
                 "near_miss": bool(j.get("near_miss", False)),
-                "signal": (j.get("reasoning") or "")[:200],
+                "signal": _as_str(j.get("reasoning"))[:200],
             },
             "response_excerpt": t.chatbot_response[:200],
         })
 
     return json.dumps({"tried_angles": tried, "turns": turns}, indent=2)
+
+
+def _render_transcript(session: SessionState, max_turns: int = 8) -> str:
+    # Full conversation as the model would see it (synth warm-up + adversarial turns),
+    # so the planner diagnoses real posture and the generator continues one coherent user.
+    if not session.transcript:
+        return "(no conversation yet — this is the first turn)"
+    lines = []
+    for t in session.transcript[-max_turns:]:
+        lines.append(f"[turn {t.get('turn')} | {t.get('mode')}] user: {_as_str(t.get('user'))[:400]}")
+        lines.append(f"  bot: {_as_str(t.get('bot'))[:400]}")
+    return "\n".join(lines)
 
 
 class AdaptationPlanner:
@@ -68,6 +81,7 @@ class AdaptationPlanner:
             target_persona=target_persona or "(not applicable)",
             attack_memory=memory_ctx,
             history=_summarize_history(session),
+            transcript=_render_transcript(session),
             best_failure_score=session.best_failure_score,
             repeated_refusals=session.repeated_refusals,
             suspicion_score=session.suspicion_score,
@@ -88,6 +102,7 @@ class TurnGenerator:
             scenario=session.scenario,
             strategy_instruction=strategy_instruction,
             history=_summarize_history(session),
+            transcript=_render_transcript(session),
         )
         return GeneratedTurn.from_dict(self.llm.complete_json(GENERATE_SYSTEM, user))
 

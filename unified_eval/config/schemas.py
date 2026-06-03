@@ -51,6 +51,10 @@ class RunSettings:
     #   "rule":           rule-based (uses RuleBasedSessionPolicyController + PolicyConfig)
     #   "llm":            LLM-based (uses SessionPolicyController, costs extra tokens)
     session_policy: str = "none"
+    # When true (default), a conversation ends as soon as one adversarial turn reaches the
+    # failure threshold. Set false to keep probing the full attack ladder up to max_turns,
+    # recording every failure instead of just the first.
+    stop_on_first_failure: bool = True
     # Knobs for `rule` mode (ignored otherwise).
     policy_max_refusals: int = 3
     policy_suspicion_per_refusal: float = 0.2

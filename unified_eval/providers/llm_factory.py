@@ -113,8 +113,8 @@ def build_llm(
         model = spec.model or "anthropic.claude-haiku-4-5-20251001-v1:0"
         region = spec.bedrock_region or os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
         call_fn = make_bedrock_backend(model=model, region=region, max_tokens=spec.max_tokens)
-        # No ASE-side equivalent of Bedrock today; fall back to mock for synth.
-        synth_chat = _make_mock_synth_chat()
+        # Synth (user_simulator) reuses the same Bedrock call: prompt -> generated text.
+        synth_chat = _make_bedrock_synth_chat(call_fn)
 
     elif provider == "ollama":
         # ARE has no native ollama backend; route both to mock with a clear warning.
@@ -166,6 +166,18 @@ def _resolve_api_key(env_var: str | None) -> str | None:
     if not env_var:
         return None
     return os.environ.get(env_var) or None
+
+
+def _make_bedrock_synth_chat(call_fn: LLMCallFn) -> SynthChatFn:
+    """Adapt a Bedrock (system, user) backend to the synth prompt-in/text-out shape.
+
+    Mirrors the LangChain synth path (chat.invoke(prompt)): the full user-simulator
+    prompt is sent as the user turn with no system message.
+    """
+    def call(prompt: str) -> str:
+        return str(call_fn(system="", user=prompt).get("content", ""))
+
+    return call
 
 
 def _make_mock_synth_chat() -> SynthChatFn:

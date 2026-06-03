@@ -1,8 +1,25 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Dict, Any
+
+
+def _as_str(value: Any, default: str = "") -> str:
+    """Coerce an LLM-returned field to a string.
+
+    Models that follow the JSON schema loosely (e.g. Nova) sometimes return a
+    nested object/array where a string was expected; downstream code slices and
+    formats these as text, so normalize at the parse boundary instead of crashing.
+    """
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+    return str(value)
 
 
 # ---------------------------------------------------------------------------
@@ -25,16 +42,16 @@ class PlanResult:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> PlanResult:
         return cls(
-            attack_angle=d.get("attack_angle", "unknown"),
-            sub_tactic=d.get("sub_tactic", ""),
-            model_posture=d.get("model_posture", "unknown"),
-            next_generator_instruction=d.get(
-                "next_generator_instruction", "Continue evaluation safely."
+            attack_angle=_as_str(d.get("attack_angle"), "unknown"),
+            sub_tactic=_as_str(d.get("sub_tactic")),
+            model_posture=_as_str(d.get("model_posture"), "unknown"),
+            next_generator_instruction=_as_str(
+                d.get("next_generator_instruction"), "Continue evaluation safely."
             ),
-            ladder_dependency=d.get("ladder_dependency", ""),
-            risk_level=d.get("risk_level", "medium"),
+            ladder_dependency=_as_str(d.get("ladder_dependency")),
+            risk_level=_as_str(d.get("risk_level"), "medium"),
             stop_session=bool(d.get("stop_session", False)),
-            reason=d.get("reason", ""),
+            reason=_as_str(d.get("reason")),
             raw=d,
         )
 
@@ -54,13 +71,13 @@ class GeneratedTurn:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> GeneratedTurn:
         return cls(
-            user_input=d.get("user_input", ""),
-            intent_label=d.get("intent_label", ""),
-            register=d.get("register", ""),
-            probe_architecture=d.get("probe_architecture", ""),
-            social_trigger=d.get("social_trigger", "none"),
-            expected_risk=d.get("expected_risk", "low"),
-            framing_rationale=d.get("framing_rationale", ""),
+            user_input=_as_str(d.get("user_input")),
+            intent_label=_as_str(d.get("intent_label")),
+            register=_as_str(d.get("register")),
+            probe_architecture=_as_str(d.get("probe_architecture")),
+            social_trigger=_as_str(d.get("social_trigger"), "none"),
+            expected_risk=_as_str(d.get("expected_risk"), "low"),
+            framing_rationale=_as_str(d.get("framing_rationale")),
             raw=d,
         )
 
@@ -216,6 +233,10 @@ class SessionState:
     suspicion_score: float = 0.0
     best_failure_score: int = 0
     repeated_refusals: int = 0
+    # Full conversation log (synth + adversarial), independent of `turns` which holds
+    # adversarial-only records. Used to give the planner/generator real history and
+    # persona continuity without polluting the adversarial analytics above.
+    transcript: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass

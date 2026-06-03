@@ -273,7 +273,10 @@ def make_bedrock_backend(
     max_tokens: int = 1024,
 ) -> LLMCallFn:
     """
-    AWS Bedrock backend using Claude via boto3.
+    AWS Bedrock backend via the Converse API.
+
+    Uses the model-agnostic Converse API, so the same code works for both
+    Anthropic Claude and Amazon Nova model ids (and others Bedrock exposes).
 
     Credentials are resolved by boto3 in the standard order:
     env vars (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY), ~/.aws/credentials, or IAM role.
@@ -290,25 +293,20 @@ def make_bedrock_backend(
     client = boto3.client("bedrock-runtime", region_name=region)
 
     def call(system: str, user: str) -> Dict[str, Any]:
-        import json as _json
-        body = _json.dumps({
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": max_tokens,
-            "system": system,
-            "messages": [{"role": "user", "content": user}],
-        })
-        response = client.invoke_model(
-            modelId=model,
-            body=body,
-            contentType="application/json",
-            accept="application/json",
-        )
-        result = _json.loads(response["body"].read())
+        kwargs: Dict[str, Any] = {
+            "modelId": model,
+            "messages": [{"role": "user", "content": [{"text": user}]}],
+            "inferenceConfig": {"maxTokens": max_tokens},
+        }
+        if system:  # synth turns send no system; omit rather than pass an empty one
+            kwargs["system"] = [{"text": system}]
+        response = client.converse(**kwargs)
+        usage = response.get("usage", {})
         return {
-            "content": result["content"][0]["text"],
+            "content": response["output"]["message"]["content"][0]["text"],
             "usage": {
-                "prompt_tokens": result["usage"]["input_tokens"],
-                "completion_tokens": result["usage"]["output_tokens"],
+                "prompt_tokens": usage.get("inputTokens", 0),
+                "completion_tokens": usage.get("outputTokens", 0),
             },
         }
 

@@ -71,10 +71,12 @@ def test_adapt_user_template_formats():
         scenario="test",
         target_persona="none",
         attack_memory="no memory",
+        transcript="(none)",
         history="{}",
         best_failure_score=0,
         repeated_refusals=0,
         suspicion_score=0.0,
+        turn_count=0,
     )
     assert "toxicity" in filled
     assert "test" in filled
@@ -85,6 +87,7 @@ def test_generate_user_template_formats():
         scenario_type="toxicity",
         scenario="test",
         strategy_instruction="probe carefully",
+        transcript="(none)",
         history="{}",
     )
     assert "probe carefully" in filled

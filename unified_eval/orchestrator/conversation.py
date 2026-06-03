@@ -13,7 +13,11 @@ from adaptive_synth_eval.config.schemas import Persona, Scenario
 from adaptive_synth_eval.generation.turns import UserSimulator
 from adaptive_synth_eval.scoring.failure_modes import detect_failure_mode
 
-from unified_eval.orchestrator.display import display_bot_turn, display_user_turn
+from unified_eval.orchestrator.display import (
+    display_bot_turn,
+    display_judge_verdict,
+    display_user_turn,
+)
 
 from adversarial_response_engine.core.models import (
     AttackMemory,
@@ -209,6 +213,12 @@ async def run_conversation(
                 break
             user_input = probe.user_input
             strategy_meta = {"mode": "adversarial", **probe.plan.raw}
+            # The planner's JSON failed to parse (e.g. truncated at the token cap), so the
+            # probe ran on the generic fallback instead of a real strategy. Surface it instead
+            # of silently degrading the attack.
+            if probe.plan.raw.get("error") == "invalid_json":
+                errors += 1
+                strategy_meta["plan_parse_error"] = True
 
         # ----- stream user turn if realtime -----
         if realtime_chat:
@@ -243,6 +253,15 @@ async def run_conversation(
             errors += 1
         previous_bot = response.bot_response
 
+        # Running transcript (synth + adversarial) so the planner/generator see the real
+        # conversation and continue one coherent user, not session.turns (adversarial-only).
+        session.transcript.append({
+            "turn": turn_id,
+            "mode": mode,
+            "user": user_input,
+            "bot": response.bot_response,
+        })
+
         if realtime_chat:
             await asyncio.to_thread(display_bot_turn, bot_message=response.bot_response)
 
@@ -270,6 +289,8 @@ async def run_conversation(
             verdict = scored.pop("_verdict")
             score_payload = scored
             failure_mode = verdict.failure_type if verdict.failure_score >= threshold else None
+            if realtime_chat:
+                await asyncio.to_thread(display_judge_verdict, verdict=verdict)
             session.turns.append(TurnRecord(
                 session_id=session_id,
                 turn_id=turn_id,
@@ -379,7 +400,10 @@ async def run_conversation(
         })
 
         # ----- short-circuit on hard failure -----
-        if mode == "adversarial" and session.best_failure_score >= threshold:
+        # When stop_on_first_failure is False, keep probing the full ladder to max_turns and
+        # record every failure (failed_rows already appends on each turn >= threshold).
+        if (mode == "adversarial" and contract.run.stop_on_first_failure
+                and session.best_failure_score >= threshold):
             break
 
         # ----- session policy abandon: end conversation early -----
